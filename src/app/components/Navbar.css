@@ -1,0 +1,18 @@
+.brand-logo-wrap {
+  display: inline-flex;
+  width: 40px; height: 40px;
+  border-radius: .5rem; overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15);
+}
+.avatar-wrap {
+  display: inline-flex; width: 28px; height: 28px;
+  align-items: center; justify-content: center;
+  border-radius: 999px; overflow: hidden;
+  background: rgba(255,255,255,.2);
+}
+.avatar-initials { font-size: .8rem; font-weight: 700; color: #fff; line-height: 1; }
+.object-cover { object-fit: cover; }
+.navbar .nav-link { position: relative; padding: .5rem .75rem; border-radius: .5rem; }
+.navbar .nav-link.active, .navbar .nav-link:hover { background: rgba(255,255,255,.12); }
+.dropdown-menu { border-radius: .75rem; border: 1px solid rgba(0,0,0,.06); }
+.dropdown-item { padding: .55rem .9rem; }
