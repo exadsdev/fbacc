@@ -1,80 +1,58 @@
-// src/app/api/line/notify-order/route.js
+// src/app/api/line/webhook/route.js
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { pushMessage } from "../../../lib/line";
+import { verifySignature, envStatus } from "../../../lib/line";
 
 /**
- * Endpoint สำหรับระบบออเดอร์ของคุณเท่านั้น
- * ส่งแจ้งเตือนไปยัง admin คนเดียว (LINE_ADMIN_USER_ID)
- * ป้องกันด้วย ORDER_WEBHOOK_SECRET ผ่าน Header: x-api-key
- *
- * ตัวอย่าง payload:
- * {
- *   "orderId": "ORD-2025-000123",
- *   "total": 29900,
- *   "currency": "THB",
- *   "customer": { "name": "Somchai", "phone": "0812345678" },
- *   "items": [
- *     { "name": "PG Phone V9", "qty": 1, "price": 29900 }
- *   ],
- *   "url": "https://your-admin/orders/ORD-2025-000123"
- * }
+ * Production Mode:
+ * - หยุดตอบกลับทุกข้อความ (รวมถึง register)
+ * - ใช้เพื่อรับ event เท่านั้น เช่น order, follow, join, message
+ * - ระบบภายในอื่นจะใช้ /api/line/notify-order สำหรับแจ้ง Admin
  */
 
-const ADMIN_USER_ID = process.env.LINE_ADMIN_USER_ID || "";
-const API_KEY = process.env.ORDER_WEBHOOK_SECRET || "";
+export async function GET() {
+  const ok = envStatus();
+  const allSet = ok.LINE_CHANNEL_SECRET && ok.LINE_CHANNEL_ACCESS_TOKEN;
+  return new Response(allSet ? "LINE Webhook Ready ✅" : `❌ Missing ENV: ${JSON.stringify(ok)}`, {
+    status: 200,
+  });
+}
+
+export async function HEAD() {
+  return new Response(null, { status: 200 });
+}
 
 export async function POST(req) {
   try {
-    const key = req.headers.get("x-api-key") || "";
-    if (!key || key !== API_KEY) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    const signature = req.headers.get("x-line-signature") || "";
+    const rawBody = await req.text();
+
+    // ตรวจสอบลายเซ็น
+    if (!verifySignature(rawBody, signature)) {
+      return NextResponse.json({ ok: false, error: "Invalid Signature" }, { status: 401 });
     }
 
-    const payload = await req.json().catch(() => ({}));
-    const {
-      orderId = "",
-      total = 0,
-      currency = "THB",
-      customer = {},
-      items = [],
-      url = "",
-    } = payload || {};
+    // แปลงข้อมูล body
+    const body = JSON.parse(rawBody || "{}");
+    const events = Array.isArray(body?.events) ? body.events : [];
 
-    if (!ADMIN_USER_ID) {
-      return NextResponse.json(
-        { ok: false, error: "Missing LINE_ADMIN_USER_ID" },
-        { status: 500 }
-      );
+    // แค่ log ข้อมูล event ไม่ตอบกลับอะไรเลย
+    for (const ev of events) {
+      const type = ev?.type;
+      const sourceType = ev?.source?.type;
+      const userId = ev?.source?.userId;
+      const groupId = ev?.source?.groupId;
+      const roomId = ev?.source?.roomId;
+      const msg = ev?.message?.text;
+
+      console.log("[LINE] event:", { type, sourceType, userId, groupId, roomId, msg });
     }
 
-    if (!orderId) {
-      return NextResponse.json({ ok: false, error: "orderId required" }, { status: 400 });
-    }
-
-    const itemLines = Array.isArray(items)
-      ? items
-          .slice(0, 10)
-          .map((it) => `• ${it?.name || "-"} x${it?.qty || 1} @ ${Number(it?.price || 0).toLocaleString()} ${currency}`)
-          .join("\n")
-      : "";
-
-    const text =
-      `🧾 มีคำสั่งซื้อใหม่\n` +
-      `Order: ${orderId}\n` +
-      (customer?.name ? `ลูกค้า: ${customer.name}\n` : "") +
-      (customer?.phone ? `โทร: ${customer.phone}\n` : "") +
-      (itemLines ? `สินค้า:\n${itemLines}\n` : "") +
-      `ยอดรวม: ${Number(total).toLocaleString()} ${currency}\n` +
-      (url ? `ดูรายละเอียด: ${url}\n` : "") +
-      `\n(แจ้งเตือนนี้ส่งถึง Admin เท่านั้น)`;
-
-    await pushMessage(ADMIN_USER_ID, [{ type: "text", text }]);
-
+    // ไม่ต้องตอบกลับ LINE
     return NextResponse.json({ ok: true });
   } catch (e) {
-    console.error("Notify Order error:", e);
+    console.error("Webhook error:", e);
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }
