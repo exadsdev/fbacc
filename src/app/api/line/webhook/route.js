@@ -1,19 +1,24 @@
+// app/api/line/webhook/route.js
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 
-const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
-// NOTE: This webhook is production-safe: it verifies signature and DOES NOT auto-reply to user messages.
+const CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET;
+const ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
-function verifySignature(bodyText, signature) {
-  if (!CHANNEL_SECRET) return false;
-  const calc = crypto.createHmac("sha256", CHANNEL_SECRET).update(bodyText).digest("base64");
-  try {
-    // timing-safe compare
-    return crypto.timingSafeEqual(Buffer.from(signature || ""), Buffer.from(calc));
-  } catch {
-    return false;
+async function replyMessage(replyToken, messages) {
+  const res = await fetch("https://api.line.me/v2/bot/message/reply", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ replyToken, messages }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    console.warn("LINE reply error:", res.status, t);
   }
 }
 
@@ -22,26 +27,59 @@ export async function POST(req) {
     const signature = req.headers.get("x-line-signature") || "";
     const bodyText = await req.text();
 
-    if (!verifySignature(bodyText, signature)) {
+    const calcSig = crypto
+      .createHmac("sha256", CHANNEL_SECRET)
+      .update(bodyText)
+      .digest("base64");
+
+    if (signature !== calcSig) {
       return NextResponse.json({ ok: false, error: "Bad signature" }, { status: 401 });
     }
 
-    // Parse once (we ignore all message events on purpose)
     const body = JSON.parse(bodyText);
 
-    // Optional: log minimal event meta (no auto-replies)
     for (const ev of body.events || []) {
-      console.log("[LINE webhook]", {
-        type: ev?.type,
-        source: ev?.source?.type,
-        ts: ev?.timestamp,
+      const sourceType = ev?.source?.type;
+      const userId = ev?.source?.userId;
+      const groupId = ev?.source?.groupId;
+      const roomId = ev?.source?.roomId;
+
+      console.log("[LINE] event:", {
+        type: ev.type,
+        sourceType,
+        userId,
+        groupId,
+        roomId,
       });
+
+      if (ev.type === "message" && ev.message?.type === "text" && ev.replyToken) {
+        const text = (ev.message.text || "").trim().toLowerCase();
+        if (text === "register" || text === "ลงทะเบียน") {
+          await replyMessage(ev.replyToken, [
+            {
+              type: "text",
+              text:
+                "บันทึก ID นี้ไว้ใช้ push:\n" +
+                (userId ? `userId: ${userId}\n` : "") +
+                (groupId ? `groupId: ${groupId}\n` : "") +
+                (roomId ? `roomId: ${roomId}\n` : ""),
+            },
+          ]);
+        } else {
+          await replyMessage(ev.replyToken, [
+            { type: "text", text: "พิมพ์ register เพื่อรับ userId/groupId สำหรับตั้งค่า" },
+          ]);
+        }
+      }
+
+      if (ev.type === "join" && sourceType === "group") {
+        console.log("[LINE] joined group:", groupId);
+      }
     }
 
-    // Always 200 OK without replying to end users
     return NextResponse.json({ ok: true });
   } catch (e) {
-    console.error("LINE webhook error:", e);
+    console.error("Webhook error:", e);
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
 }
